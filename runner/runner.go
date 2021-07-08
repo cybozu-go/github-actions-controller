@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/cybozu-go/well"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type Runner struct {
@@ -27,6 +29,7 @@ type Runner struct {
 	// Directory/File Paths
 	runnerDir         string
 	workDir           string
+	tokenPath         string
 	startedFlagFile   string
 	extendFlagFile    string
 	failureFlagFile   string
@@ -48,6 +51,7 @@ func NewRunner(listener Listener, listenAddr, runnerDir, workDir, varDir string)
 		listener:          listener,
 		runnerDir:         runnerDir,
 		workDir:           workDir,
+		tokenPath:         filepath.Join(varDir, "runnertoken"),
 		startedFlagFile:   filepath.Join(varDir, "started"),
 		extendFlagFile:    filepath.Join(varDir, "extend"),
 		failureFlagFile:   filepath.Join(varDir, "failure"),
@@ -85,8 +89,10 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) runListener(ctx context.Context) error {
+	logger := log.FromContext(ctx)
 	if isFileExists(r.startedFlagFile) {
 		metrics.UpdateRunnerPodState(metrics.Stale)
+		logger.Info("Pod is stale; waiting for deletion")
 		r.deletionTime.Store(time.Now())
 		<-ctx.Done()
 		return nil
@@ -102,13 +108,18 @@ func (r *Runner) runListener(ctx context.Context) error {
 		}
 	}
 
+	b, err := ioutil.ReadFile(r.tokenPath)
+	if err != nil {
+		return fmt.Errorf("failed load %s; %w", r.tokenPath, err)
+	}
+
 	configArgs := []string{
 		"--unattended",
 		"--replace",
 		"--name", r.envs.podName,
 		"--labels", r.envs.podNamespace + "/" + r.envs.runnerPoolName,
 		"--url", fmt.Sprintf("https://github.com/%s/%s", r.envs.runnerOrg, r.envs.runnerRepo),
-		"--token", r.envs.runnerToken,
+		"--token", string(b),
 		"--work", r.workDir,
 	}
 	if err := r.listener.configure(ctx, configArgs); err != nil {
@@ -122,7 +133,7 @@ func (r *Runner) runListener(ctx context.Context) error {
 
 	metrics.UpdateRunnerPodState(metrics.Debugging)
 	extend := isFileExists(r.extendFlagFile)
-	err := r.updateDeletionTime(extend)
+	err = r.updateDeletionTime(ctx, extend)
 	if err != nil {
 		return err
 	}
@@ -134,22 +145,24 @@ func (r *Runner) runListener(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) updateDeletionTime(extend bool) error {
+func (r *Runner) updateDeletionTime(ctx context.Context, extend bool) error {
+	logger := log.FromContext(ctx)
 	if extend {
 		dur, err := time.ParseDuration(r.envs.extendDuration)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Update pod's deletion time with the time %s later\n", r.envs.extendDuration)
+		logger.Info(fmt.Sprintf("Update pod's deletion time with the time %s later\n", r.envs.extendDuration))
 		r.deletionTime.Store(time.Now().UTC().Add(dur))
 	} else {
-		fmt.Println("Update pod's deletion time with current time")
+		logger.Info("Update pod's deletion time with current time")
 		r.deletionTime.Store(time.Now().UTC())
 	}
 	return nil
 }
 
 func (r *Runner) notifyToSlack(ctx context.Context, extend bool) error {
+	logger := log.FromContext(ctx)
 	var jobResult string
 	switch {
 	case isFileExists(r.failureFlagFile):
@@ -162,7 +175,7 @@ func (r *Runner) notifyToSlack(ctx context.Context, extend bool) error {
 		jobResult = agent.JobResultUnknown
 	}
 	if len(r.envs.option.SlackAgentServiceName) != 0 {
-		fmt.Println("Send an notification to slack jobResult = ", jobResult)
+		logger.Info("Send an notification to slack", "jobResult", jobResult)
 		c, err := agent.NewClient(fmt.Sprintf("http://%s", r.envs.option.SlackAgentServiceName))
 		if err != nil {
 			return err
@@ -173,7 +186,7 @@ func (r *Runner) notifyToSlack(ctx context.Context, extend bool) error {
 		}
 		return c.PostResult(ctx, r.envs.option.SlackChannel, jobResult, extend, r.envs.podNamespace, r.envs.podName, jobInfo)
 	} else {
-		fmt.Println("Skip sending an notification to slack because Slack agent service name is blank")
+		logger.Info("Skip sending an notification to slack because Slack agent service name is blank")
 	}
 	return nil
 }

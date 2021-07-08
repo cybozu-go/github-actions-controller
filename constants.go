@@ -14,6 +14,8 @@ const (
 	// RunnerRepoLabelKey is a label key for repository name.
 	RunnerRepoLabelKey = "meows.cybozu.com/repository"
 
+	RunnerSecretExpiresInAnnotationKey = "meows.cybozu.com/expires-in"
+
 	// RunnerPoolFinalizer is a finalizer for runnerpool resource.
 	RunnerPoolFinalizer = "meows.cybozu.com/runnerpool"
 
@@ -78,9 +80,6 @@ const (
 
 	// RunnerPoolNameEnvName is a env field key for RUNNER_POOL_NAME.
 	RunnerPoolNameEnvName = "RUNNER_POOL_NAME"
-
-	// RunnerTokenEnvName is a env field key for RUNNER_TOKEN.
-	RunnerTokenEnvName = "RUNNER_TOKEN"
 
 	// RunnerOptionEnvName is a env field key for RUNNER_OPTION
 	RunnerOptionEnvName = "RUNNER_OPTION"

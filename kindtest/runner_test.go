@@ -1,7 +1,6 @@
 package kindtest
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
@@ -139,7 +138,7 @@ func testRunner() {
 			}
 			podName, deletionTime = findPodToBeDeleted(after)
 			if podName == "" {
-				return errors.New("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
+				return fmt.Errorf("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
 			}
 			return nil
 		}, 3*time.Minute, time.Second).ShouldNot(HaveOccurred())
@@ -193,7 +192,7 @@ func testRunner() {
 			}
 			podName, deletionTime = findPodToBeDeleted(after)
 			if podName == "" {
-				return errors.New("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
+				return fmt.Errorf("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
 			}
 			return nil
 		}, 3*time.Minute, time.Second).ShouldNot(HaveOccurred())
@@ -246,7 +245,7 @@ func testRunner() {
 			}
 			podName, deletionTime = findPodToBeDeleted(after)
 			if podName == "" {
-				return errors.New("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
+				return fmt.Errorf("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
 			}
 			return nil
 		}, 3*time.Minute, time.Second).ShouldNot(HaveOccurred())
@@ -302,7 +301,7 @@ func testRunner() {
 			}
 			podName, deletionTime = findPodToBeDeleted(after)
 			if podName == "" {
-				return errors.New("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
+				return fmt.Errorf("one pod should get deletion time from /" + constants.DeletionTimeEndpoint)
 			}
 			return nil
 		}, 3*time.Minute, time.Second).ShouldNot(HaveOccurred())
@@ -331,10 +330,20 @@ func testRunner() {
 		stdout, stderr, err := kubectl("delete", "runnerpools", "-n", runner1NS, runnerPool1Name)
 		Expect(err).ShouldNot(HaveOccurred(), fmt.Errorf("stdout: %s, stderr: %s, err: %v", stdout, stderr, err))
 
+		By("checking to delete deployment")
 		Eventually(func() error {
-			_, _, err := kubectl("get", "deployment", "-n", runner1NS, runnerPool1Name)
-			if err == nil {
-				return errors.New("deployment is not deleted yet")
+			stdout, stderr, err := kubectl("get", "deployment", "-n", runner1NS, runnerPool1Name)
+			if !isNotFoundFromStderr(stderr) {
+				return fmt.Errorf("deployment is not deleted yet; stdout: %s, stderr: %s, err: %v", stdout, stderr, err)
+			}
+			return nil
+		}).ShouldNot(HaveOccurred())
+
+		By("checking to delete secret")
+		Eventually(func() error {
+			stdout, stderr, err := kubectl("get", "secret", "-n", runner1NS, "runner-token-"+runnerPool1Name)
+			if !isNotFoundFromStderr(stderr) {
+				return fmt.Errorf("secret is not deleted yet; stdout: %s, stderr: %s, err: %v", stdout, stderr, err)
 			}
 			return nil
 		}).ShouldNot(HaveOccurred())
@@ -373,10 +382,20 @@ func testRunner() {
 		stdout, stderr, err = kubectl("delete", "runnerpools", "-n", runner2NS, runnerPool2Name)
 		Expect(err).ShouldNot(HaveOccurred(), fmt.Errorf("stdout: %s, stderr: %s, err: %v", stdout, stderr, err))
 
+		By("checking to delete deployment")
 		Eventually(func() error {
-			_, _, err := kubectl("get", "deployment", "-n", runner2NS, runnerPool2Name)
-			if err == nil {
-				return errors.New("deployment is not deleted yet")
+			stdout, stderr, err := kubectl("get", "deployment", "-n", runner2NS, runnerPool2Name)
+			if !isNotFoundFromStderr(stderr) {
+				return fmt.Errorf("deployment is not deleted yet; stdout: %s, stderr: %s, err: %v", stdout, stderr, err)
+			}
+			return nil
+		}).ShouldNot(HaveOccurred())
+
+		By("checking to delete secret")
+		Eventually(func() error {
+			stdout, stderr, err := kubectl("get", "secret", "-n", runner2NS, "runner-token-"+runnerPool2Name)
+			if !isNotFoundFromStderr(stderr) {
+				return fmt.Errorf("secret is not deleted yet; stdout: %s, stderr: %s, err: %v", stdout, stderr, err)
 			}
 			return nil
 		}).ShouldNot(HaveOccurred())

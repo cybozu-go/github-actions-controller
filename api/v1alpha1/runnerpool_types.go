@@ -18,7 +18,6 @@ var reservedEnvNames = map[string]bool{
 	constants.RunnerOrgEnvName:      true,
 	constants.RunnerRepoEnvName:     true,
 	constants.RunnerPoolNameEnvName: true,
-	constants.RunnerTokenEnvName:    true,
 	constants.RunnerOptionEnvName:   true,
 }
 
@@ -183,4 +182,8 @@ func (s *RunnerPoolSpec) validateUpdate(old RunnerPoolSpec) field.ErrorList {
 // GetRunnerDeploymentName returns the Deployment name for runners.
 func (r *RunnerPool) GetRunnerDeploymentName() string {
 	return r.Name
+}
+
+func (r *RunnerPool) GetRunnerSecretName() string {
+	return "runner-token-" + r.Name
 }

@@ -23,7 +23,6 @@ func removedEnv() []string {
 	rmList := []string{
 		constants.PodNameEnvName,
 		constants.PodNamespaceEnvName,
-		constants.RunnerTokenEnvName,
 		constants.RunnerOrgEnvName,
 		constants.RunnerRepoEnvName,
 		constants.RunnerPoolNameEnvName,

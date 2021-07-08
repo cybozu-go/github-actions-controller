@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/template"
 	"time"
 
@@ -90,6 +91,10 @@ func isDeploymentReady(name, namespace string, replicas int) error {
 		return fmt.Errorf("AvailableReplicas is not %d: %d", replicas, int(d.Status.AvailableReplicas))
 	}
 	return nil
+}
+
+func isNotFoundFromStderr(stderr []byte) bool {
+	return strings.Contains(string(stderr), "(NotFound)")
 }
 
 func fetchRunnerPods(namespace, runnerpool string) (*corev1.PodList, error) {

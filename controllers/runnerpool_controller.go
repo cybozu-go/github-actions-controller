@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"time"
 
 	constants "github.com/cybozu-go/meows"
 	meowsv1alpha1 "github.com/cybozu-go/meows/api/v1alpha1"
+	"github.com/cybozu-go/meows/github"
 	"github.com/cybozu-go/meows/runner"
 	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
@@ -30,10 +33,11 @@ type RunnerPoolReconciler struct {
 	organizationName string
 	runnerImage      string
 	runnerManager    RunnerManager
+	githubClient     github.Client
 }
 
 // NewRunnerPoolReconciler creates RunnerPoolReconciler
-func NewRunnerPoolReconciler(client client.Client, log logr.Logger, scheme *runtime.Scheme, repositoryNames []string, organizationName, runnerImage string, runnerManager RunnerManager) *RunnerPoolReconciler {
+func NewRunnerPoolReconciler(client client.Client, log logr.Logger, scheme *runtime.Scheme, repositoryNames []string, organizationName, runnerImage string, runnerManager RunnerManager, githubClient github.Client) *RunnerPoolReconciler {
 	return &RunnerPoolReconciler{
 		Client:           client,
 		log:              log,
@@ -42,12 +46,14 @@ func NewRunnerPoolReconciler(client client.Client, log logr.Logger, scheme *runt
 		organizationName: organizationName,
 		runnerImage:      runnerImage,
 		runnerManager:    runnerManager,
+		githubClient:     githubClient,
 	}
 }
 
 //+kubebuilder:rbac:groups=meows.cybozu.com,resources=runnerpools,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=meows.cybozu.com,resources=runnerpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -72,11 +78,6 @@ func (r *RunnerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 		log.Info("start finalizing RunnerPool")
 
-		if err := r.finalize(ctx, log, rp); err != nil {
-			log.Error(err, "failed to finalize")
-			return ctrl.Result{}, err
-		}
-
 		if err := r.runnerManager.Stop(ctx, rp); err != nil {
 			log.Error(err, "failed to stop runner manager")
 			return ctrl.Result{}, err
@@ -94,6 +95,11 @@ func (r *RunnerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	if err := r.validateRepositoryName(rp); err != nil {
 		log.Error(err, "failed to validate repository name")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileSecret(ctx, log, rp); err != nil {
+		log.Error(err, "failed to reconcile secret")
 		return ctrl.Result{}, err
 	}
 
@@ -116,6 +122,7 @@ func (r *RunnerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *RunnerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&meowsv1alpha1.RunnerPool{}).
+		Owns(&corev1.Secret{}).
 		Owns(&appsv1.Deployment{}).
 		Complete(r)
 }
@@ -127,19 +134,6 @@ func (r *RunnerPoolReconciler) validateRepositoryName(rp *meowsv1alpha1.RunnerPo
 		}
 	}
 	return fmt.Errorf("found the invalid repository name %v. Valid repository names are %v", rp.Spec.RepositoryName, r.repositoryNames)
-}
-
-func (r *RunnerPoolReconciler) finalize(ctx context.Context, log logr.Logger, rp *meowsv1alpha1.RunnerPool) error {
-	d := &appsv1.Deployment{}
-	d.SetNamespace(rp.GetNamespace())
-	d.SetName(rp.GetRunnerDeploymentName())
-	if err := r.Delete(ctx, d); err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete deployment")
-			return err
-		}
-	}
-	return nil
 }
 
 func labelSet(rp *meowsv1alpha1.RunnerPool, component string) map[string]string {
@@ -172,6 +166,48 @@ func mergeMap(m1, m2 map[string]string) map[string]string {
 	return m
 }
 
+func (r *RunnerPoolReconciler) reconcileSecret(ctx context.Context, log logr.Logger, rp *meowsv1alpha1.RunnerPool) error {
+	s := &corev1.Secret{}
+	s.SetNamespace(rp.GetNamespace())
+	s.SetName(rp.GetRunnerSecretName())
+	op, err := ctrl.CreateOrUpdate(ctx, r.Client, s, func() error {
+		if expiresInStr, ok := s.Annotations[constants.RunnerSecretExpiresInAnnotationKey]; ok {
+			expiresIn, err := time.Parse(time.RFC3339, expiresInStr)
+			if err != nil {
+				log.Error(err, "failed to parse expires-in annotation")
+				return err
+			}
+			if expiresIn.Add(-5 * time.Minute).After(time.Now()) {
+				log.Info("skip update secret", "expires_in", expiresIn)
+				return nil
+			}
+		}
+		runnerToken, err := r.githubClient.CreateRegistrationToken(ctx, rp.Spec.RepositoryName)
+		if err != nil {
+			log.Error(err, "failed to create actions registration token", "repository", rp.Spec.RepositoryName)
+			return err
+		}
+		// NOTE: The registration token expires in one hour.
+		// https://docs.github.com/en/rest/reference/actions#create-a-registration-token-for-a-repository
+		// > The token expires after one hour.
+		s.Annotations = mergeMap(s.Annotations, map[string]string{
+			constants.RunnerSecretExpiresInAnnotationKey: time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+		})
+		s.StringData = map[string]string{
+			"runnertoken": runnerToken,
+		}
+		return ctrl.SetControllerReference(rp, s, r.scheme)
+	})
+	if err != nil {
+		log.Error(err, "failed to reconcile secret")
+		return err
+	}
+	if op != controllerutil.OperationResultNone {
+		log.Info("reconciled runnerSecret", "operation", string(op))
+	}
+	return nil
+}
+
 func (r *RunnerPoolReconciler) reconcileDeployment(ctx context.Context, log logr.Logger, rp *meowsv1alpha1.RunnerPool) error {
 	d := &appsv1.Deployment{}
 	d.SetNamespace(rp.GetNamespace())
@@ -201,6 +237,14 @@ func (r *RunnerPoolReconciler) reconcileDeployment(ctx context.Context, log logr
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		})
+		volumes = append(volumes, corev1.Volume{
+			Name: rp.GetRunnerSecretName(),
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: rp.GetRunnerSecretName(),
+				},
+			},
+		})
 		d.Spec.Template.Spec.Volumes = volumes
 
 		r.addRunnerContainerIfNotExists(d)
@@ -222,6 +266,12 @@ func (r *RunnerPoolReconciler) reconcileDeployment(ctx context.Context, log logr
 		volumeMounts := append(rp.Spec.Template.VolumeMounts, corev1.VolumeMount{
 			Name:      varDir,
 			MountPath: constants.RunnerVarDirPath,
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      rp.GetRunnerSecretName(),
+			ReadOnly:  true,
+			MountPath: filepath.Join(constants.RunnerVarDirPath, "runnertoken"),
+			SubPath:   "runnertoken",
 		})
 		runnerContainer.VolumeMounts = volumeMounts
 

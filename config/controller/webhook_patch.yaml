@@ -4,14 +4,6 @@ metadata:
   name: mutating-webhook-configuration
   annotations:
     cert-manager.io/inject-ca-from: $(CERTIFICATE_NAMESPACE)/$(CERTIFICATE_NAME)
-webhooks:
-- name: pod-hook.meows.cybozu.com
-  namespaceSelector:
-    matchExpressions:
-    - key: meows.cybozu.com/pod-mutate
-      operator: NotIn
-      values:
-      - ignore
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
