@@ -14,7 +14,7 @@ const (
 	// RunnerRepoLabelKey is a label key for repository name.
 	RunnerRepoLabelKey = "meows.cybozu.com/repository"
 
-	RunnerSecretExpiresInAnnotationKey = "meows.cybozu.com/expires-in"
+	RunnerSecretExpiresAtAnnotationKey = "meows.cybozu.com/expires-at"
 
 	// RunnerPoolFinalizer is a finalizer for runnerpool resource.
 	RunnerPoolFinalizer = "meows.cybozu.com/runnerpool"

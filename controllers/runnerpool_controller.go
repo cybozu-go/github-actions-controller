@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	constants "github.com/cybozu-go/meows"
 	meowsv1alpha1 "github.com/cybozu-go/meows/api/v1alpha1"
-	"github.com/cybozu-go/meows/github"
 	"github.com/cybozu-go/meows/runner"
 	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
@@ -18,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,11 +32,10 @@ type RunnerPoolReconciler struct {
 	organizationName string
 	runnerImage      string
 	runnerManager    RunnerManager
-	githubClient     github.Client
 }
 
 // NewRunnerPoolReconciler creates RunnerPoolReconciler
-func NewRunnerPoolReconciler(client client.Client, log logr.Logger, scheme *runtime.Scheme, repositoryNames []string, organizationName, runnerImage string, runnerManager RunnerManager, githubClient github.Client) *RunnerPoolReconciler {
+func NewRunnerPoolReconciler(client client.Client, log logr.Logger, scheme *runtime.Scheme, repositoryNames []string, organizationName, runnerImage string, runnerManager RunnerManager) *RunnerPoolReconciler {
 	return &RunnerPoolReconciler{
 		Client:           client,
 		log:              log,
@@ -46,7 +44,6 @@ func NewRunnerPoolReconciler(client client.Client, log logr.Logger, scheme *runt
 		organizationName: organizationName,
 		runnerImage:      runnerImage,
 		runnerManager:    runnerManager,
-		githubClient:     githubClient,
 	}
 }
 
@@ -168,42 +165,25 @@ func mergeMap(m1, m2 map[string]string) map[string]string {
 
 func (r *RunnerPoolReconciler) reconcileSecret(ctx context.Context, log logr.Logger, rp *meowsv1alpha1.RunnerPool) error {
 	s := &corev1.Secret{}
-	s.SetNamespace(rp.GetNamespace())
-	s.SetName(rp.GetRunnerSecretName())
-	op, err := ctrl.CreateOrUpdate(ctx, r.Client, s, func() error {
-		if expiresInStr, ok := s.Annotations[constants.RunnerSecretExpiresInAnnotationKey]; ok {
-			expiresIn, err := time.Parse(time.RFC3339, expiresInStr)
-			if err != nil {
-				log.Error(err, "failed to parse expires-in annotation")
-				return err
-			}
-			if expiresIn.Add(-5 * time.Minute).After(time.Now()) {
-				log.Info("skip update secret", "expires_in", expiresIn)
-				return nil
-			}
-		}
-		runnerToken, err := r.githubClient.CreateRegistrationToken(ctx, rp.Spec.RepositoryName)
-		if err != nil {
-			log.Error(err, "failed to create actions registration token", "repository", rp.Spec.RepositoryName)
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      rp.GetRunnerSecretName(),
+		Namespace: rp.Namespace,
+	}, s)
+	if !apierrors.IsNotFound(err) {
+		return err
+	} else {
+		s.SetName(rp.GetRunnerSecretName())
+		s.SetNamespace(rp.Namespace)
+		if err := ctrl.SetControllerReference(rp, s, r.scheme); err != nil {
 			return err
 		}
-		// NOTE: The registration token expires in one hour.
-		// https://docs.github.com/en/rest/reference/actions#create-a-registration-token-for-a-repository
-		// > The token expires after one hour.
-		s.Annotations = mergeMap(s.Annotations, map[string]string{
-			constants.RunnerSecretExpiresInAnnotationKey: time.Now().Add(1 * time.Hour).Format(time.RFC3339),
-		})
-		s.StringData = map[string]string{
-			"runnertoken": runnerToken,
+		err := r.Create(ctx, s)
+		if err != nil {
+			return err
 		}
-		return ctrl.SetControllerReference(rp, s, r.scheme)
-	})
-	if err != nil {
-		log.Error(err, "failed to reconcile secret")
-		return err
 	}
-	if op != controllerutil.OperationResultNone {
-		log.Info("reconciled runnerSecret", "operation", string(op))
+	if _, ok := s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey]; !ok {
+		return fmt.Errorf("wait for the secret to be issued by secret watcher")
 	}
 	return nil
 }

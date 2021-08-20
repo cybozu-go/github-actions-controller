@@ -76,7 +76,18 @@ func run() error {
 		config.runnerManagerInterval,
 		mgr.GetClient(),
 		githubClient,
-		rc.NewClient())
+		rc.NewClient(),
+	)
+
+	secretWatcher := controllers.NewSecretWatcher(
+		mgr.GetClient(),
+		config.runnerManagerInterval,
+		githubClient,
+	)
+	err = mgr.Add(secretWatcher)
+	if err != nil {
+		return err
+	}
 
 	reconciler := controllers.NewRunnerPoolReconciler(
 		mgr.GetClient(),
@@ -86,8 +97,8 @@ func run() error {
 		config.organizationName,
 		config.runnerImage,
 		runnerManager,
-		githubClient,
 	)
+
 	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "runner-pool-reconciler")
 		return err

@@ -53,6 +53,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 	serviceAccountName := "customized-sa"
 	wait := 10 * time.Second
 	mockManager := newRunnerManagerMock()
+	var githubFakeClient *github.FakeClient
 
 	ctx := context.Background()
 	var mgrCtx context.Context
@@ -66,6 +67,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 
+		githubFakeClient = github.NewFakeClient(organizationName)
 		r := NewRunnerPoolReconciler(
 			mgr.GetClient(),
 			ctrl.Log.WithName("controllers").WithName("RunnerPool"),
@@ -74,8 +76,15 @@ var _ = Describe("RunnerPool reconciler", func() {
 			organizationName,
 			defaultRunnerImage,
 			RunnerManager(mockManager),
-			github.NewFakeClient(organizationName),
 		)
+
+		secretWatcher := NewSecretWatcher(
+			mgr.GetClient(),
+			1*time.Second,
+			githubFakeClient,
+		)
+		Expect(mgr.Add(secretWatcher)).To(Succeed())
+
 		Expect(r.SetupWithManager(mgr)).To(Succeed())
 
 		mgrCtx, mgrCancel = context.WithCancel(context.Background())
@@ -120,9 +129,9 @@ var _ = Describe("RunnerPool reconciler", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)).To(Succeed())
 
 		By("confirming the Secret's expires in")
-		expiresIn, err := time.Parse(time.RFC3339, s.Annotations[constants.RunnerSecretExpiresInAnnotationKey])
+		expiresAt, err := time.Parse(time.RFC3339, s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey])
 		Expect(err).NotTo(HaveOccurred())
-		Expect(expiresIn).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 5*time.Minute))
+		Expect(expiresAt).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 5*time.Minute))
 
 		By("checking that a runner pool is the owner of a secret")
 		Expect(s.OwnerReferences).To(HaveLen(1))
@@ -310,9 +319,9 @@ var _ = Describe("RunnerPool reconciler", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)).To(Succeed())
 
 		By("confirming the Secret's expires in")
-		expiresIn, err := time.Parse(time.RFC3339, s.Annotations[constants.RunnerSecretExpiresInAnnotationKey])
+		expiresAt, err := time.Parse(time.RFC3339, s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey])
 		Expect(err).NotTo(HaveOccurred())
-		Expect(expiresIn).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 5*time.Minute))
+		Expect(expiresAt).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 5*time.Minute))
 
 		By("checking that a runner pool is the owner of a secret")
 		Expect(s.OwnerReferences).To(HaveLen(1))
@@ -482,7 +491,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 		deleteRunnerPool(ctx, runnerPoolName, namespace)
 	})
 
-	It("should or not update secret", func() {
+	It("should or not update secret by a SecretWatcher", func() {
 		By("deploying RunnerPool resource")
 		rp := makeRunnerPool(runnerPoolName, namespace, repositoryNames[0])
 		Expect(k8sClient.Create(ctx, rp)).To(Succeed())
@@ -501,7 +510,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 		time.Sleep(wait) // Wait for the reconciliation to run a few times. Please check the controller's log.
 
 		testCase := []struct {
-			expiresInDuration time.Duration
+			expiresAtDuration time.Duration
 			shouldUpdate      bool
 		}{
 			{
@@ -527,13 +536,13 @@ var _ = Describe("RunnerPool reconciler", func() {
 		}
 		for _, tc := range testCase {
 			By("getting the created Secret")
-			fmt.Printf("testcase is {expiresInDuration: %s, should update: %v}\n", tc.expiresInDuration.String(), tc.shouldUpdate)
+			fmt.Printf("testcase is {expiresAtDuration: %s, should update: %v}\n", tc.expiresAtDuration.String(), tc.shouldUpdate)
 			s := new(corev1.Secret)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)).To(Succeed())
 
 			By("set annotation")
-			baseTime := time.Now().Add(tc.expiresInDuration).Format(time.RFC3339)
-			s.Annotations[constants.RunnerSecretExpiresInAnnotationKey] = baseTime
+			baseTime := time.Now().Add(tc.expiresAtDuration).Format(time.RFC3339)
+			s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey] = baseTime
 			Expect(k8sClient.Update(ctx, s)).To(Succeed())
 			time.Sleep(wait)
 
@@ -542,7 +551,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 				s = new(corev1.Secret)
 				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)
 				Expect(err).ToNot(HaveOccurred())
-				tmStr := s.Annotations[constants.RunnerSecretExpiresInAnnotationKey]
+				tmStr := s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey]
 				tm, err := time.Parse(time.RFC3339, tmStr)
 				Expect(err).ToNot(HaveOccurred())
 
@@ -555,7 +564,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 			s = new(corev1.Secret)
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)
 			Expect(err).ToNot(HaveOccurred())
-			tm := s.Annotations[constants.RunnerSecretExpiresInAnnotationKey]
+			tm := s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey]
 			Expect(err).ToNot(HaveOccurred())
 			Expect(tm).Should(Equal(baseTime))
 		}
