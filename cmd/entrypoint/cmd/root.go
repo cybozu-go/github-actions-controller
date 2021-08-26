@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -8,9 +9,12 @@ import (
 	"github.com/cybozu-go/meows/runner"
 	"github.com/cybozu-go/well"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var config struct {
+	zapOpts    zap.Options
 	listenAddr string
 }
 
@@ -28,7 +32,9 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
+		podName := os.Getenv(constants.PodNameEnvName)
+		logger := zap.New(zap.UseFlagOptions(&config.zapOpts)).WithName("runner").WithValues("pod", podName)
+		log.SetLogger(logger)
 		well.Go(r.Run)
 
 		well.Stop()
@@ -47,4 +53,8 @@ func Execute() {
 func init() {
 	fs := rootCmd.Flags()
 	fs.StringVar(&config.listenAddr, "listen-address", fmt.Sprintf(":%d", constants.RunnerListenPort), "Listening address and port.")
+
+	goflags := flag.NewFlagSet("klog", flag.ExitOnError)
+	config.zapOpts.BindFlags(goflags)
+	fs.AddGoFlagSet(goflags)
 }

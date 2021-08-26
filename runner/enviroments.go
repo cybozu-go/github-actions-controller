@@ -20,7 +20,6 @@ type environments struct {
 	// Environments
 	podName        string
 	podNamespace   string
-	runnerToken    string
 	runnerOrg      string
 	runnerRepo     string
 	runnerPoolName string
@@ -34,7 +33,6 @@ func newRunnerEnvs() (*environments, error) {
 	envs := &environments{
 		podName:        os.Getenv(constants.PodNameEnvName),
 		podNamespace:   os.Getenv(constants.PodNamespaceEnvName),
-		runnerToken:    os.Getenv(constants.RunnerTokenEnvName),
 		runnerOrg:      os.Getenv(constants.RunnerOrgEnvName),
 		runnerRepo:     os.Getenv(constants.RunnerRepoEnvName),
 		runnerPoolName: os.Getenv(constants.RunnerPoolNameEnvName),
@@ -68,9 +66,6 @@ func (e *environments) checkRequiredEnvs() error {
 	}
 	if len(e.podNamespace) == 0 {
 		return fmt.Errorf("%s must be set", constants.PodNamespaceEnvName)
-	}
-	if len(e.runnerToken) == 0 {
-		return fmt.Errorf("%s must be set", constants.RunnerTokenEnvName)
 	}
 	if len(e.runnerOrg) == 0 {
 		return fmt.Errorf("%s must be set", constants.RunnerOrgEnvName)

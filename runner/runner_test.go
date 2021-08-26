@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +17,8 @@ import (
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
 	gomegatypes "github.com/onsi/gomega/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 var (
@@ -29,10 +32,10 @@ var _ = Describe("Runner", func() {
 		Expect(os.MkdirAll(testRunnerDir, 0755)).To(Succeed())
 		Expect(os.MkdirAll(testWorkDir, 0755)).To(Succeed())
 		Expect(os.MkdirAll(testVarDir, 0755)).To(Succeed())
+		createFakeTokenFile()
 
 		os.Setenv(constants.PodNameEnvName, "fake-pod-name")
 		os.Setenv(constants.PodNamespaceEnvName, "fake-pod-ns")
-		os.Setenv(constants.RunnerTokenEnvName, "fake-runner-token")
 		os.Setenv(constants.RunnerOrgEnvName, "fake-org")
 		os.Setenv(constants.RunnerRepoEnvName, "fake-repo")
 		os.Setenv(constants.RunnerPoolNameEnvName, "fake-runnerpool")
@@ -330,12 +333,20 @@ func startRunner(listener Listener) context.CancelFunc {
 	r, err := NewRunner(listener, fmt.Sprintf(":%d", constants.RunnerListenPort), testRunnerDir, testWorkDir, testVarDir)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	ctx, cancel := context.WithCancel(context.Background())
+	logger := zap.New()
+	ctx = log.IntoContext(ctx, logger)
 	go func() {
 		defer GinkgoRecover()
 		Expect(r.Run(ctx)).To(Succeed())
 	}()
 	time.Sleep(2 * time.Second) // delay
 	return cancel
+}
+
+func createFakeTokenFile() {
+	Expect(os.MkdirAll(filepath.Join(testVarDir), 0755)).To(Succeed())
+	err := ioutil.WriteFile(filepath.Join(testVarDir, "runnertoken"), []byte("faketoken"), os.ModePerm)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 }
 
 func createFlagFile(filename string) {

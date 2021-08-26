@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,6 +111,24 @@ func deleteRunnerPool(ctx context.Context, name, namespace string) {
 	ExpectWithOffset(1, k8sClient.Delete(ctx, rp)).To(Succeed())
 	EventuallyWithOffset(1, func() bool {
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &meowsv1alpha1.RunnerPool{})
+		return apierrors.IsNotFound(err)
+	}).Should(BeTrue())
+
+	d := &appsv1.Deployment{}
+	d.Name = name
+	d.Namespace = namespace
+	k8sClient.Delete(ctx, d)
+	EventuallyWithOffset(1, func() bool {
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &appsv1.Deployment{})
+		return apierrors.IsNotFound(err)
+	}).Should(BeTrue())
+
+	s := &corev1.Secret{}
+	s.Name = rp.GetRunnerSecretName()
+	s.Namespace = namespace
+	k8sClient.Delete(ctx, s)
+	EventuallyWithOffset(1, func() bool {
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: rp.GetRunnerSecretName(), Namespace: namespace}, &corev1.Secret{})
 		return apierrors.IsNotFound(err)
 	}).Should(BeTrue())
 }

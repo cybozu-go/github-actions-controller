@@ -8,7 +8,6 @@ import (
 	meowsv1alpha1 "github.com/cybozu-go/meows/api/v1alpha1"
 	"github.com/cybozu-go/meows/controllers"
 	"github.com/cybozu-go/meows/github"
-	"github.com/cybozu-go/meows/hooks"
 	"github.com/cybozu-go/meows/metrics"
 	rc "github.com/cybozu-go/meows/runner/client"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,7 +17,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	k8sMetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -73,25 +71,23 @@ func run() error {
 		return err
 	}
 
-	dec, err := admission.NewDecoder(scheme)
-	if err != nil {
-		setupLog.Error(err, "unable to create decoder", "controller", "RunnerPool")
-		return err
-	}
-	wh := mgr.GetWebhookServer()
-	wh.Register("/pod/mutate", hooks.NewPodMutator(
-		mgr.GetClient(),
-		ctrl.Log.WithName("meows-token-pod-mutator"),
-		dec,
-		githubClient,
-	))
-
 	runnerManager := controllers.NewRunnerManager(
 		ctrl.Log.WithName("RunnerManager"),
 		config.runnerManagerInterval,
 		mgr.GetClient(),
 		githubClient,
-		rc.NewClient())
+		rc.NewClient(),
+	)
+
+	secretWatcher := controllers.NewSecretWatcher(
+		mgr.GetClient(),
+		config.runnerManagerInterval,
+		githubClient,
+	)
+	err = mgr.Add(secretWatcher)
+	if err != nil {
+		return err
+	}
 
 	reconciler := controllers.NewRunnerPoolReconciler(
 		mgr.GetClient(),
@@ -102,6 +98,7 @@ func run() error {
 		config.runnerImage,
 		runnerManager,
 	)
+
 	if err = reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "runner-pool-reconciler")
 		return err

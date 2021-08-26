@@ -2,19 +2,19 @@ package controllers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	constants "github.com/cybozu-go/meows"
 	meowsv1alpha1 "github.com/cybozu-go/meows/api/v1alpha1"
+	"github.com/cybozu-go/meows/github"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/pointer"
@@ -47,11 +47,13 @@ var _ = Describe("RunnerPool reconciler", func() {
 	repositoryNames := []string{"runnerpool-repo-1", "runnerpool-repo-2"}
 	namespace := "runnerpool-ns"
 	runnerPoolName := "runnerpool-1"
+	secretName := fmt.Sprintf("runner-token-%s", runnerPoolName)
 	deploymentName := "runnerpool-1"
 	defaultRunnerImage := "sample:latest"
 	serviceAccountName := "customized-sa"
 	wait := 10 * time.Second
 	mockManager := newRunnerManagerMock()
+	var githubFakeClient *github.FakeClient
 
 	ctx := context.Background()
 	var mgrCtx context.Context
@@ -65,6 +67,7 @@ var _ = Describe("RunnerPool reconciler", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 
+		githubFakeClient = github.NewFakeClient(organizationName)
 		r := NewRunnerPoolReconciler(
 			mgr.GetClient(),
 			ctrl.Log.WithName("controllers").WithName("RunnerPool"),
@@ -74,6 +77,14 @@ var _ = Describe("RunnerPool reconciler", func() {
 			defaultRunnerImage,
 			RunnerManager(mockManager),
 		)
+
+		secretWatcher := NewSecretWatcher(
+			mgr.GetClient(),
+			1*time.Second,
+			githubFakeClient,
+		)
+		Expect(mgr.Add(secretWatcher)).To(Succeed())
+
 		Expect(r.SetupWithManager(mgr)).To(Succeed())
 
 		mgrCtx, mgrCancel = context.WithCancel(context.Background())
@@ -113,14 +124,25 @@ var _ = Describe("RunnerPool reconciler", func() {
 		}).Should(Succeed())
 		time.Sleep(wait) // Wait for the reconciliation to run a few times. Please check the controller's log.
 
+		By("getting the created Secret")
+		s := new(corev1.Secret)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)).To(Succeed())
+
+		By("confirming the Secret's expires in")
+		expiresAt, err := time.Parse(time.RFC3339, s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(expiresAt).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 5*time.Minute))
+
+		By("checking that a runner pool is the owner of a secret")
+		Expect(s.OwnerReferences).To(HaveLen(1))
+		Expect(s.OwnerReferences[0]).To(MatchFields(IgnoreExtras, Fields{
+			"Kind": Equal("RunnerPool"),
+			"Name": Equal(runnerPoolName),
+		}))
+
 		By("getting the created Deployment")
 		d := new(appsv1.Deployment)
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: namespace}, d)).To(Succeed())
-
-		// DEBUG
-		str, err := json.MarshalIndent(d, "[DEBUG]", "    ")
-		Expect(err).ToNot(HaveOccurred())
-		fmt.Println(string(str))
 
 		By("confirming the Deployment's manifests")
 		// labels
@@ -150,6 +172,9 @@ var _ = Describe("RunnerPool reconciler", func() {
 			"Volumes": MatchAllElementsWithIndex(IndexIdentity, Elements{
 				"0": MatchFields(IgnoreExtras, Fields{
 					"Name": Equal("var-dir"),
+				}),
+				"1": MatchFields(IgnoreExtras, Fields{
+					"Name": Equal(secretName),
 				}),
 			}),
 		}))
@@ -209,9 +234,20 @@ var _ = Describe("RunnerPool reconciler", func() {
 			"VolumeMounts": MatchAllElementsWithIndex(IndexIdentity, Elements{
 				"0": MatchFields(IgnoreExtras, Fields{
 					"Name":      Equal("var-dir"),
-					"MountPath": Equal("/var/meows"),
+					"MountPath": Equal(constants.RunnerVarDirPath),
+				}),
+				"1": MatchFields(IgnoreExtras, Fields{
+					"Name":      Equal(secretName),
+					"MountPath": Equal(filepath.Join(constants.RunnerVarDirPath, "runnertoken")),
 				}),
 			}),
+		}))
+
+		By("checking that a runner pool is the owner of a deployment")
+		Expect(d.OwnerReferences).To(HaveLen(1))
+		Expect(d.OwnerReferences[0]).To(MatchFields(IgnoreExtras, Fields{
+			"Kind": Equal("RunnerPool"),
+			"Name": Equal(runnerPoolName),
 		}))
 
 		By("checking a manager is started")
@@ -219,12 +255,6 @@ var _ = Describe("RunnerPool reconciler", func() {
 
 		By("deleting the created RunnerPool")
 		deleteRunnerPool(ctx, runnerPoolName, namespace)
-
-		By("wating the Deployment is deleted")
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: namespace}, &appsv1.Deployment{})
-			return apierrors.IsNotFound(err)
-		}).Should(BeTrue())
 
 		By("checking a manager is stopped")
 		Expect(mockManager.started).NotTo(HaveKey(namespace + "/" + runnerPoolName))
@@ -284,14 +314,25 @@ var _ = Describe("RunnerPool reconciler", func() {
 		}).Should(Succeed())
 		time.Sleep(wait) // Wait for the reconciliation to run a few times. Please check the controller's log.
 
+		By("getting the created Secret")
+		s := new(corev1.Secret)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)).To(Succeed())
+
+		By("confirming the Secret's expires in")
+		expiresAt, err := time.Parse(time.RFC3339, s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(expiresAt).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 5*time.Minute))
+
+		By("checking that a runner pool is the owner of a secret")
+		Expect(s.OwnerReferences).To(HaveLen(1))
+		Expect(s.OwnerReferences[0]).To(MatchFields(IgnoreExtras, Fields{
+			"Kind": Equal("RunnerPool"),
+			"Name": Equal(runnerPoolName),
+		}))
+
 		By("getting the created Deployment")
 		d := new(appsv1.Deployment)
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: namespace}, d)).To(Succeed())
-
-		// DEBUG
-		str, err := json.MarshalIndent(d, "[DEBUG]", "    ")
-		Expect(err).ToNot(HaveOccurred())
-		fmt.Println(string(str))
 
 		By("confirming the Deployment's manifests")
 		// labels (omit)
@@ -314,6 +355,9 @@ var _ = Describe("RunnerPool reconciler", func() {
 				}),
 				"2": MatchFields(IgnoreExtras, Fields{
 					"Name": Equal("var-dir"),
+				}),
+				"3": MatchFields(IgnoreExtras, Fields{
+					"Name": Equal(secretName),
 				}),
 			}),
 		}))
@@ -404,9 +448,20 @@ var _ = Describe("RunnerPool reconciler", func() {
 				}),
 				"2": MatchFields(IgnoreExtras, Fields{
 					"Name":      Equal("var-dir"),
-					"MountPath": Equal("/var/meows"),
+					"MountPath": Equal(constants.RunnerVarDirPath),
+				}),
+				"3": MatchFields(IgnoreExtras, Fields{
+					"Name":      Equal(secretName),
+					"MountPath": Equal(filepath.Join(constants.RunnerVarDirPath, "runnertoken")),
 				}),
 			}),
+		}))
+
+		By("checking that a runner pool is the owner of a deployment")
+		Expect(d.OwnerReferences).To(HaveLen(1))
+		Expect(d.OwnerReferences[0]).To(MatchFields(IgnoreExtras, Fields{
+			"Kind": Equal("RunnerPool"),
+			"Name": Equal(runnerPoolName),
 		}))
 
 		By("checking a manager is started")
@@ -414,12 +469,6 @@ var _ = Describe("RunnerPool reconciler", func() {
 
 		By("deleting the created RunnerPool")
 		deleteRunnerPool(ctx, runnerPoolName, namespace)
-
-		By("wating the Deployment is deleted")
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: namespace}, &appsv1.Deployment{})
-			return apierrors.IsNotFound(err)
-		}).Should(BeTrue())
 
 		By("checking a manager is stopped")
 		Expect(mockManager.started).NotTo(HaveKey(namespace + "/" + runnerPoolName))
@@ -437,6 +486,88 @@ var _ = Describe("RunnerPool reconciler", func() {
 
 		By("checking a manager is not started")
 		Expect(mockManager.started).NotTo(HaveKey(namespace + "/" + runnerPoolName))
+
+		By("deleting the created RunnerPool")
+		deleteRunnerPool(ctx, runnerPoolName, namespace)
+	})
+
+	It("should or not update secret by a SecretWatcher", func() {
+		By("deploying RunnerPool resource")
+		rp := makeRunnerPool(runnerPoolName, namespace, repositoryNames[0])
+		Expect(k8sClient.Create(ctx, rp)).To(Succeed())
+
+		By("wating the RunnerPool become Bound")
+		Eventually(func() error {
+			rp := new(meowsv1alpha1.RunnerPool)
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: runnerPoolName, Namespace: namespace}, rp); err != nil {
+				return err
+			}
+			if !rp.Status.Bound {
+				return errors.New(`status "bound" should be true`)
+			}
+			return nil
+		}).Should(Succeed())
+		time.Sleep(wait) // Wait for the reconciliation to run a few times. Please check the controller's log.
+
+		testCase := []struct {
+			expiresAtDuration time.Duration
+			shouldUpdate      bool
+		}{
+			{
+				-10 * time.Minute,
+				true,
+			},
+			{
+				0 * time.Minute,
+				true,
+			},
+			{
+				5 * time.Minute,
+				true,
+			},
+			{
+				20 * time.Minute,
+				false,
+			},
+			{
+				1 * time.Hour,
+				false,
+			},
+		}
+		for _, tc := range testCase {
+			By("getting the created Secret")
+			fmt.Printf("testcase is {expiresAtDuration: %s, should update: %v}\n", tc.expiresAtDuration.String(), tc.shouldUpdate)
+			s := new(corev1.Secret)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)).To(Succeed())
+
+			By("set annotation")
+			baseTime := time.Now().Add(tc.expiresAtDuration).Format(time.RFC3339)
+			s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey] = baseTime
+			Expect(k8sClient.Update(ctx, s)).To(Succeed())
+			time.Sleep(wait)
+
+			if tc.shouldUpdate {
+				By("checking to update secret")
+				s = new(corev1.Secret)
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)
+				Expect(err).ToNot(HaveOccurred())
+				tmStr := s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey]
+				tm, err := time.Parse(time.RFC3339, tmStr)
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(tmStr).ShouldNot(Equal(baseTime))
+				Expect(tm).Should(BeTemporally("~", time.Now().Add(1*time.Hour), 20*time.Second))
+				continue
+			}
+
+			By("checking to not update secret")
+			s = new(corev1.Secret)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, s)
+			Expect(err).ToNot(HaveOccurred())
+			tm := s.Annotations[constants.RunnerSecretExpiresAtAnnotationKey]
+			Expect(err).ToNot(HaveOccurred())
+			Expect(tm).Should(Equal(baseTime))
+		}
 
 		By("deleting the created RunnerPool")
 		deleteRunnerPool(ctx, runnerPoolName, namespace)

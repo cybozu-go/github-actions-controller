@@ -95,7 +95,6 @@ var _ = Describe("validate RunnerPool webhook with ", func() {
 			constants.RunnerOrgEnvName,
 			constants.RunnerRepoEnvName,
 			constants.RunnerPoolNameEnvName,
-			constants.RunnerTokenEnvName,
 			constants.RunnerOptionEnvName,
 		}
 

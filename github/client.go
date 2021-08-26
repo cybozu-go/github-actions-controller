@@ -51,7 +51,7 @@ func (r *Runner) hasLabels(labels []string) bool {
 // Client generates token for GitHub Action selfhosted runner
 type Client interface {
 	GetOrganizationName() string
-	CreateRegistrationToken(context.Context, string) (string, error)
+	CreateRegistrationToken(context.Context, string) (*github.RegistrationToken, error)
 	ListRunners(context.Context, string, []string) ([]*Runner, error)
 	RemoveRunner(context.Context, string, int64) error
 }
@@ -90,20 +90,20 @@ func (c *clientImpl) GetOrganizationName() string {
 }
 
 // CreateRegistrationToken creates an Actions token to register self-hosted runner to the organization.
-func (c *clientImpl) CreateRegistrationToken(ctx context.Context, repositoryName string) (string, error) {
+func (c *clientImpl) CreateRegistrationToken(ctx context.Context, repositoryName string) (*github.RegistrationToken, error) {
 	token, res, err := c.client.Actions.CreateRegistrationToken(
 		ctx,
 		c.organizationName,
 		repositoryName,
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if res.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("invalid status code %d", res.StatusCode)
+		return nil, fmt.Errorf("invalid status code %d", res.StatusCode)
 	}
 
-	return token.GetToken(), nil
+	return token, nil
 }
 
 // ListRunners lists registered self-hosted runners for the organization.
@@ -161,13 +161,17 @@ func (c *clientImpl) RemoveRunner(ctx context.Context, repositoryName string, ru
 
 // FakeClient is a fake client
 type FakeClient struct {
-	organizationName string
-	runners          map[string][]*Runner
+	organizationName  string
+	runners           map[string][]*Runner
+	expiredAtDuration time.Duration
 }
 
 // NewFakeClient creates GitHub Actions Client.
 func NewFakeClient(organizationName string) *FakeClient {
-	return &FakeClient{organizationName: organizationName}
+	return &FakeClient{
+		organizationName:  organizationName,
+		expiredAtDuration: 1 * time.Hour,
+	}
 }
 
 // GetOrganizationName returns organizationName.
@@ -176,8 +180,14 @@ func (c *FakeClient) GetOrganizationName() string {
 }
 
 // CreateRegistrationToken returns dummy token.
-func (c *FakeClient) CreateRegistrationToken(ctx context.Context, repositoryName string) (string, error) {
-	return "AAA", nil
+func (c *FakeClient) CreateRegistrationToken(ctx context.Context, repositoryName string) (*github.RegistrationToken, error) {
+	fakeToken := "faketoken"
+	return &github.RegistrationToken{
+		Token: &fakeToken,
+		ExpiresAt: &github.Timestamp{
+			Time: time.Now().Add(c.expiredAtDuration),
+		},
+	}, nil
 }
 
 // ListRunners returns dummy list.
