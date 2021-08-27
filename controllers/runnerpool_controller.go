@@ -195,8 +195,14 @@ func (r *RunnerPoolReconciler) reconcileDeployment(ctx context.Context, log logr
 		d.Spec.Template.Spec.ImagePullSecrets = rp.Spec.Template.ImagePullSecrets
 
 		varDir := "var-dir"
+		workDir := "work-dir"
 		volumes := append(rp.Spec.Template.Volumes, corev1.Volume{
 			Name: varDir,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		}, corev1.Volume{
+			Name: workDir,
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -222,6 +228,9 @@ func (r *RunnerPoolReconciler) reconcileDeployment(ctx context.Context, log logr
 		volumeMounts := append(rp.Spec.Template.VolumeMounts, corev1.VolumeMount{
 			Name:      varDir,
 			MountPath: constants.RunnerVarDirPath,
+		}, corev1.VolumeMount{
+			Name:      workDir,
+			MountPath: constants.RunnerWorkDirPath,
 		})
 		runnerContainer.VolumeMounts = volumeMounts
 

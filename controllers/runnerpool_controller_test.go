@@ -151,6 +151,9 @@ var _ = Describe("RunnerPool reconciler", func() {
 				"0": MatchFields(IgnoreExtras, Fields{
 					"Name": Equal("var-dir"),
 				}),
+				"1": MatchFields(IgnoreExtras, Fields{
+					"Name": Equal("work-dir"),
+				}),
 			}),
 		}))
 
@@ -210,6 +213,10 @@ var _ = Describe("RunnerPool reconciler", func() {
 				"0": MatchFields(IgnoreExtras, Fields{
 					"Name":      Equal("var-dir"),
 					"MountPath": Equal("/var/meows"),
+				}),
+				"1": MatchFields(IgnoreExtras, Fields{
+					"Name":      Equal("work-dir"),
+					"MountPath": Equal("/runner/_work"),
 				}),
 			}),
 		}))
@@ -315,6 +322,9 @@ var _ = Describe("RunnerPool reconciler", func() {
 				"2": MatchFields(IgnoreExtras, Fields{
 					"Name": Equal("var-dir"),
 				}),
+				"3": MatchFields(IgnoreExtras, Fields{
+					"Name": Equal("work-dir"),
+				}),
 			}),
 		}))
 
@@ -405,6 +415,10 @@ var _ = Describe("RunnerPool reconciler", func() {
 				"2": MatchFields(IgnoreExtras, Fields{
 					"Name":      Equal("var-dir"),
 					"MountPath": Equal("/var/meows"),
+				}),
+				"3": MatchFields(IgnoreExtras, Fields{
+					"Name":      Equal("work-dir"),
+					"MountPath": Equal("/runner/_work"),
 				}),
 			}),
 		}))

@@ -19,10 +19,6 @@ var rootCmd = &cobra.Command{
 	Short: "GitHub Actions runner Entrypoint",
 	Long:  "GitHub Actions runner Entrypoint",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// FIXME: Use emptyDir.
-		if err := os.MkdirAll(constants.RunnerWorkDirPath, 0755); err != nil {
-			return err
-		}
 		listener := runner.NewListener(constants.RunnerRootDirPath)
 		r, err := runner.NewRunner(listener, config.listenAddr, constants.RunnerRootDirPath, constants.RunnerWorkDirPath, constants.RunnerVarDirPath)
 		if err != nil {
